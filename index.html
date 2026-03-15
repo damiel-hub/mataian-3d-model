@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>My CesiumJS Viewer</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>
+      /* Make the viewer fill the entire screen */
+      html, body, #cesiumContainer {
+          width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+      }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+
+  <script>
+    // 1. Enter your Cesium ion Access Token here
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIxYzhhM2Q0MC0xYjVjLTQ0YTItOGUzYS01YzJiN2ZhMDM5OTUiLCJpZCI6NDAzMDczLCJpYXQiOjE3NzM0MDYzNjl9.6m0r9Y49Oq9TanY-WOuzASerZvanL82mpjA11qLBTYA';
+
+    // ==========================================
+    // INITIALIZE VIEWER WITH GOOGLE SATELLITE
+    // ==========================================
+    const googleSatelliteProvider = new Cesium.UrlTemplateImageryProvider({
+        url: 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+        maximumLevel: 20,
+        credit: 'Imagery © Google'
+    });
+
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+        terrain: Cesium.Terrain.fromWorldTerrain(),
+        baseLayer: new Cesium.ImageryLayer(googleSatelliteProvider),
+        baseLayerPicker: false, 
+        geocoder: false,
+        animation: false,
+        timeline: false
+    });
+
+    // ==========================================
+    // 3. LOAD METASHAPE MODEL & SET CUSTOM HOME VIEW
+    // ==========================================
+    async function loadMyModel() {
+        try {
+            // --- 1. Load your Metashape 3D Tileset ---
+            const tileset = await Cesium.Cesium3DTileset.fromIonAssetId(4532433);
+            viewer.scene.primitives.add(tileset);
+
+            // --- 2. Define your EXACT custom camera view ---
+            const customDestination = new Cesium.Cartesian3(
+                -3038617.218148412, 
+                4996596.99453911, 
+                2545563.285276982
+            );
+            
+            const customOrientation = {
+                heading: 6.213171888621237,
+                pitch: -0.4902803239446625,
+                roll: 6.283093747913075
+            };
+
+            // --- 3. Go to this custom view instantly when the page loads ---
+            viewer.camera.flyTo({
+                destination: customDestination,
+                orientation: customOrientation,
+                duration: 0.0 // 0 seconds = jump there instantly on load
+            });
+
+            // --- 4. Override the Home Button to fly back to this exact view ---
+            viewer.homeButton.viewModel.command.beforeExecute.addEventListener(function(e) {
+                e.cancel = true; // Stop the default Earth zoom
+                
+                viewer.camera.flyTo({
+                    destination: customDestination,
+                    orientation: customOrientation,
+                    duration: 2.0 // 2 seconds = smooth cinematic flight back home
+                });
+            });
+
+        } catch (error) {
+            console.log("Error loading tileset:", error);
+        }
+    }
+
+    // ==========================================
+    // 4. LOAD FIRST SET OF POINTS (YELLOW)
+    // ==========================================
+    async function loadMyPoints() {
+        try {
+            const resource = await Cesium.IonResource.fromAssetId(4532438);
+            const dataSource = await Cesium.GeoJsonDataSource.load(resource);
+
+            viewer.dataSources.add(dataSource);
+
+            const elevationOffset = 135;          
+            const longitudeOffsetDegrees = 0; 
+            const latitudeOffsetDegrees = 0;  
+
+            const entities = dataSource.entities.values;
+            for (let i = 0; i < entities.length; i++) {
+                const entity = entities[i];
+                
+                const currentPosition = entity.position.getValue(Cesium.JulianDate.now());
+                if (currentPosition) {
+                    const cartographic = Cesium.Cartographic.fromCartesian(currentPosition);
+                    
+                    cartographic.height += elevationOffset;
+                    cartographic.longitude += Cesium.Math.toRadians(longitudeOffsetDegrees);
+                    cartographic.latitude += Cesium.Math.toRadians(latitudeOffsetDegrees);
+                    
+                    entity.position = Cesium.Cartesian3.fromRadians(
+                        cartographic.longitude, 
+                        cartographic.latitude, 
+                        cartographic.height
+                    );
+                }
+
+                entity.billboard = undefined; 
+
+                entity.point = new Cesium.PointGraphics({
+                    color: Cesium.Color.YELLOW,
+                    pixelSize: 10,
+                    outlineColor: Cesium.Color.BLACK,
+                    outlineWidth: 2
+                });
+
+                if (entity.properties) {
+                    const sampleIdProp = entity.properties['Sample ID'] || entity.properties['Sample_ID'];
+                    
+                    if (sampleIdProp) {
+                        const sampleIdText = sampleIdProp.getValue();
+                        
+                        entity.label = new Cesium.LabelGraphics({
+                            text: sampleIdText,
+                            font: '14pt sans-serif',
+                            fillColor: Cesium.Color.WHITE,
+                            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                            outlineColor: Cesium.Color.BLACK,
+                            outlineWidth: 2,
+                            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                            pixelOffset: new Cesium.Cartesian2(0, -20)
+                        });
+                        
+                        const sampleDate = entity.properties['Date'] ? entity.properties['Date'].getValue() : 'N/A';
+                        const samplerName = entity.properties['Sampler'] ? entity.properties['Sampler'].getValue() : 'N/A';
+                        
+                        entity.description = `
+                            <table class="cesium-infoBox-defaultTable">
+                                <tbody>
+                                    <tr><th>Sample ID</th><td>${sampleIdText}</td></tr>
+                                    <tr><th>Date</th><td>${sampleDate}</td></tr>
+                                    <tr><th>Sampler</th><td>${samplerName}</td></tr>
+                                </tbody>
+                            </table>
+                        `;
+                    }
+                }
+            }
+
+        } catch (error) {
+            console.error("Error loading the point data:", error);
+        }
+    }
+
+    // ==========================================
+    // 5. LOAD SECOND SET OF POINTS (CYAN)
+    // ==========================================
+    async function loadSecondPoints() {
+        try {
+            const resource = await Cesium.IonResource.fromAssetId(4532440);
+            const dataSource = await Cesium.GeoJsonDataSource.load(resource);
+
+            viewer.dataSources.add(dataSource);
+
+            const elevationOffset = 135;          
+            const longitudeOffsetDegrees = 0.0; 
+            const latitudeOffsetDegrees = 0.0;  
+
+            const entities = dataSource.entities.values;
+            for (let i = 0; i < entities.length; i++) {
+                const entity = entities[i];
+                
+                const currentPosition = entity.position.getValue(Cesium.JulianDate.now());
+                if (currentPosition) {
+                    const cartographic = Cesium.Cartographic.fromCartesian(currentPosition);
+                    cartographic.height += elevationOffset;
+                    cartographic.longitude += Cesium.Math.toRadians(longitudeOffsetDegrees);
+                    cartographic.latitude += Cesium.Math.toRadians(latitudeOffsetDegrees);
+                    
+                    entity.position = Cesium.Cartesian3.fromRadians(
+                        cartographic.longitude, 
+                        cartographic.latitude, 
+                        cartographic.height
+                    );
+                }
+
+                entity.billboard = undefined; 
+
+                entity.point = new Cesium.PointGraphics({
+                    color: Cesium.Color.CYAN,        
+                    pixelSize: 15,
+                    outlineColor: Cesium.Color.BLACK,
+                    outlineWidth: 2
+                });
+
+                if (entity.properties) {
+                    const nameProp = entity.properties['Name'] || entity.properties['name'] || entity.properties['Sample ID'] || entity.properties['Sample_ID'] || entity.properties['ID'];
+                    
+                    if (nameProp) {
+                        entity.label = new Cesium.LabelGraphics({
+                            text: nameProp.getValue().toString(),
+                            font: '14pt sans-serif',
+                            fillColor: Cesium.Color.WHITE,
+                            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                            outlineColor: Cesium.Color.BLACK,
+                            outlineWidth: 2,
+                            verticalOrigin: Cesium.VerticalOrigin.TOP,
+                            pixelOffset: new Cesium.Cartesian2(20, -20) 
+                        });
+                    }
+
+                    let tableHtml = '<table class="cesium-infoBox-defaultTable"><tbody>';
+                    const propertyNames = entity.properties.propertyNames;
+                    
+                    for (let j = 0; j < propertyNames.length; j++) {
+                        const propName = propertyNames[j];
+                        const propValue = entity.properties[propName].getValue();
+                        tableHtml += `<tr><th>${propName}</th><td>${propValue}</td></tr>`;
+                    }
+                    tableHtml += '</tbody></table>';
+                    
+                    entity.description = tableHtml;
+                }
+            }
+
+        } catch (error) {
+            console.error("Error loading the second point data:", error);
+        }
+    }
+
+    // ==========================================
+    // 6. LOAD AND SMOOTH 3D ROUTES
+    // ==========================================
+    async function loadMyRoutes() {
+        const routeAssetIds = [4532483, 4532481, 4532484];
+
+        try {
+            for (let i = 0; i < routeAssetIds.length; i++) {
+                const currentAssetId = routeAssetIds[i];
+                const resource = await Cesium.IonResource.fromAssetId(currentAssetId);
+                
+                const dataSource = await Cesium.KmlDataSource.load(resource, {
+                    camera: viewer.scene.camera,
+                    canvas: viewer.scene.canvas,
+                });
+                viewer.dataSources.add(dataSource);
+
+                let elevationOffset = 110.0;
+                let longitudeOffsetDegrees = 0.0;
+                let latitudeOffsetDegrees = 0.0;
+
+                if (currentAssetId === 4532483) {
+                    elevationOffset = 135.0;
+                    longitudeOffsetDegrees = 0.0005;
+                } else if (currentAssetId === 4532481) {
+                    elevationOffset = 0.0;
+                }
+
+                const entities = dataSource.entities.values;
+                for (let j = 0; j < entities.length; j++) {
+                    const entity = entities[j];
+                    
+                    if (entity.polyline) {
+                        const originalPositions = entity.polyline.positions.getValue(Cesium.JulianDate.now());
+                        
+                        if (originalPositions && originalPositions.length > 1) {
+                            const cleanedPositions = [];
+                            
+                            for (let k = 0; k < originalPositions.length; k++) {
+                                const cartesianPosition = originalPositions[k];
+                                
+                                if (k > 0) {
+                                    const distance = Cesium.Cartesian3.distance(cartesianPosition, originalPositions[k-1]);
+                                    if (distance < 0.1) continue; 
+                                }
+
+                                const cartographic = Cesium.Cartographic.fromCartesian(cartesianPosition);
+                                cartographic.height += elevationOffset;
+                                cartographic.longitude += Cesium.Math.toRadians(longitudeOffsetDegrees);
+                                cartographic.latitude += Cesium.Math.toRadians(latitudeOffsetDegrees);
+                                
+                                cleanedPositions.push(Cesium.Cartesian3.fromRadians(
+                                    cartographic.longitude,
+                                    cartographic.latitude,
+                                    cartographic.height
+                                ));
+                            }
+
+                            if (cleanedPositions.length >= 2) {
+                                try {
+                                    const times = cleanedPositions.map((_, index) => index);
+                                    const spline = new Cesium.CatmullRomSpline({
+                                        times: times,
+                                        points: cleanedPositions
+                                    });
+
+                                    const smoothPositions = [];
+                                    for (let t = 0; t <= times[times.length - 1]; t += 0.2) {
+                                        smoothPositions.push(spline.evaluate(t));
+                                    }
+                                    entity.polyline.positions = smoothPositions;
+                                } catch (error) {
+                                    console.warn("Spline smoothing failed, using linear lines.", error);
+                                    entity.polyline.positions = cleanedPositions;
+                                }
+                            }
+
+                            entity.polyline.width = 5; 
+                            entity.polyline.material = new Cesium.PolylineGlowMaterialProperty({
+                                glowPower: 0.1,
+                                color: Cesium.Color.CYAN
+                            });
+                            entity.polyline.clampToGround = false; 
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error("Error loading and smoothing the 3D routes:", error);
+        }
+    }
+
+    // ==========================================
+    // 7. EXECUTE ALL FUNCTIONS
+    // ==========================================
+    loadMyModel();
+    loadMyPoints();
+    loadSecondPoints();
+    loadMyRoutes();
+  </script>
+</body>
+</html>
